@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="web/public/clipdrop-vertical-white.svg" />
+    <img src="web/public/clipdrop-vertical-dark.svg" alt="clipdrop" width="160" />
+  </picture>
+</p>
+
 # clipdrop — clipboard sharing across devices
 
 > **Live:** https://clipdrop.idarciooliveira.workers.dev
@@ -33,13 +40,38 @@ node cli/src/index.js pull -s "$SESSION" --host "$HOST"
 node cli/src/index.js pull -s "$SESSION" --watch --host "$HOST"
 ```
 
+## Branding
+
+| Asset | File |
+| --- | --- |
+| Logo (dark) | `web/public/clipdrop-vertical-dark.svg` |
+| Logo (light) | `web/public/clipdrop-vertical-white.svg` |
+| Favicon | `web/public/icon.svg` (the dark logo; light-scheme browsers get the white one) |
+| App mark (no wordmark) | `web/public/mark.svg` |
+| PWA icons | `icon-192.png`, `icon-512.png`, `icon-maskable-512.png`, `apple-touch-icon.png` |
+
+Palette comes from the logo: ink `#0A0A0A`, gray `#444`, amber `#FFAE00 → #FF8C00`. The UI follows the system dark/light setting.
+
+## PWA
+
+Installable on iOS, Android and desktop (manifest + maskable icons). A small service worker caches the app shell so it opens instantly and offline; `/api/*` and the WebSocket always go to the network. Bump `CACHE` in `web/public/sw.js` to invalidate.
+
+## UI
+
+- Clips are fixed-size cards (newest first); click a card to expand the full text, or use its Copy button.
+- Composer: auto-growing, **Paste** button, Enter sends on desktop (Shift+Enter = newline). On touch devices Enter is a newline and the send button sends. Ctrl/Cmd+Enter always sends.
+- QR code sits behind a button; the page reconnects and refreshes when a phone wakes the tab.
+
 ## Proof
 
 Production verified 2026-10-22 — see `proof/`:
 
 - `01-home-mobile.png` — landing, New session + join by code
-- `02-room-mobile.png` — session with QR, expiry countdown, copy buttons, link detection
+- `02-room-mobile.png` — session with the fixed-size clip grid, expiry countdown, copy buttons
 - `03-room-desktop.png` — same session on desktop (realtime sync)
+- `04-clip-expanded-mobile.png` / `06-clip-expanded-desktop.png` — expanded clip
+- `05-qr-mobile.png` — QR panel
+- `07-room-light.png` — light theme
 
 ## API
 
