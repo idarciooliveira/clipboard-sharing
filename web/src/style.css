@@ -92,6 +92,8 @@ header.top {
   background: var(--surface); border: 1px solid var(--line); transition: border-color .15s, box-shadow .15s;
 }
 .field:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+@media (pointer: coarse) { .field, .share-row .field { font-size: 16px; } } /* <16px makes iOS zoom on focus */
+.field { -webkit-appearance: none; appearance: none; }
 .field::placeholder, textarea::placeholder { color: var(--muted); }
 .join .field { font: 500 16px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .06em; text-align: center; }
 .err { min-height: 20px; margin: 0; font-size: 13px; color: #ef6a5a; }
@@ -164,7 +166,9 @@ dialog.sheet::backdrop { background: rgba(0, 0, 0, .55); backdrop-filter: blur(3
   padding: 10px 16px calc(10px + var(--safe-b));
   background: color-mix(in srgb, var(--bg) 90%, transparent);
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-top: 1px solid var(--line);
+  will-change: transform; touch-action: manipulation;
 }
+.composer.kb { padding-bottom: 10px; } /* keyboard covers the home-indicator inset */
 .composer-inner {
   max-width: 880px; margin: 0 auto; display: flex; align-items: flex-end; gap: 6px; padding: 6px;
   background: var(--surface); border: 1px solid var(--line-strong); border-radius: 22px;
@@ -174,6 +178,8 @@ dialog.sheet::backdrop { background: rgba(0, 0, 0, .55); backdrop-filter: blur(3
 .composer textarea {
   flex: 1; min-width: 0; resize: none; border: 0; outline: none; background: transparent;
   padding: 9px 6px; font-size: 16px; line-height: 22px; max-height: 144px; height: 40px;
+  -webkit-appearance: none; appearance: none; border-radius: 0; -webkit-text-size-adjust: 100%;
+  overscroll-behavior: contain;
 }
 .composer .icon-btn { width: 40px; height: 40px; border-radius: 50%; flex: none; }
 .composer .paste { border: 0; color: var(--muted); }
