@@ -102,8 +102,6 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-export { SessionRoom };
-
 // ---- Durable Object ----
 
 export class SessionRoom extends DurableObject {
