@@ -1,4 +1,5 @@
 import QRCode from "qrcode";
+import { decryptText, encryptText, encryptBytes, decryptBytes, generateKey, setKey, hasKey, validKey } from "./crypto";
 
 type Msg = { id: string; text: string; device: string; createdAt: number };
 type ClipFile = { id: string; name: string; mime: string; size: number; device: string; createdAt: number };
@@ -79,12 +80,12 @@ if (path === "/" || path === "/index.html") {
     <main class="hero">
       ${mark(72)}
       <h1>Share text between<br />your devices.</h1>
-      <p>Open a session, scan the code on your other device, paste. Gone after 12 hours. No login.</p>
+      <p>Open a session, scan the code on your other device, paste. End-to-end encrypted. Gone after 12 hours. No login.</p>
       <div class="actions">
         <button id="new" class="btn primary">New session</button>
         <div class="divider">or join</div>
         <div class="join">
-          <input id="code" class="field" placeholder="code" maxlength="16" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="go" inputmode="text" aria-label="Session code" />
+          <input id="code" class="field" placeholder="code or link" maxlength="200" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="go" inputmode="text" aria-label="Session code or link" />
           <button id="join" class="btn">Join</button>
         </div>
         <p class="err" id="err" role="alert"></p>
@@ -98,18 +99,23 @@ if (path === "/" || path === "/index.html") {
     newBtn.disabled = true; newBtn.textContent = "Creating…"; errEl.textContent = "";
     try {
       const { id } = await api<{ id: string }>("/api/sessions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ttlHours: 12 }) });
-      location.href = `/s/${id}`;
+      // E2EE: generate the key locally and carry it in the fragment — the server never sees it
+      location.href = `/s/${id}#${generateKey()}`;
     } catch (err) {
       errEl.textContent = String(err);
       newBtn.disabled = false; newBtn.textContent = "New session";
     }
   };
   const go = () => {
-    // accept a bare code or a pasted full link
-    const raw = codeEl.value.trim().toLowerCase();
-    const v = raw.match(/\/s\/([a-z0-9]{4,16})/)?.[1] ?? raw;
-    if (/^[a-z0-9]{4,16}$/.test(v)) location.href = `/s/${v}`;
-    else errEl.textContent = "Enter a valid session code";
+    // accept a bare code, `code#key`, or a pasted full link (the #key part is case-sensitive)
+    const raw = codeEl.value.trim();
+    let code = "", frag = "";
+    const um = raw.match(/\/s\/([a-z0-9]{4,16})(?:#([^#\s]+))?/i);
+    if (um) { code = um[1].toLowerCase(); frag = um[2] ?? ""; }
+    else { const hash = raw.indexOf("#"); code = (hash < 0 ? raw : raw.slice(0, hash)).toLowerCase().trim(); frag = hash < 0 ? "" : raw.slice(hash + 1); }
+    if (!/^[a-z0-9]{4,16}$/.test(code)) { errEl.textContent = "Enter a valid session code"; return; }
+    if (frag && !validKey(frag)) { errEl.textContent = "That key doesn't look right — copy the full link again"; return; }
+    location.href = `/s/${code}${frag ? `#${frag}` : ""}`;
   };
   (document.getElementById("join") as HTMLButtonElement).onclick = go;
   codeEl.onkeydown = (ev) => { if (ev.key === "Enter") go(); };
@@ -121,12 +127,38 @@ if (path === "/" || path === "/index.html") {
   const id = (m?.[1] ?? "").toLowerCase();
   if (!id) location.href = "/";
 
-  const link = `${location.origin}/s/${id}`;
+  // E2EE: the key lives in the URL fragment (#<key>) and never reaches the server.
+  const rawKey = location.hash.startsWith("#") ? location.hash.slice(1) : "";
+  if (validKey(rawKey)) setKey(rawKey);
+
+  const link = `${location.origin}/s/${id}${validKey(rawKey) ? `#${rawKey}` : ""}`;
   let messages: Msg[] = [];
   let files: ClipFile[] = [];
   let ws: WebSocket | null = null;
   let expiresAt = 0;
   let qrReady = false;
+
+  /* decrypt at ingest — state only ever holds plaintext for rendering */
+  async function decMsg(raw: Msg): Promise<Msg> {
+    const text = await decryptText(raw.text);
+    return text === null ? raw : { ...raw, text };
+  }
+  async function decMsgs(raw: Msg[]): Promise<Msg[]> {
+    return Promise.all(raw.map(decMsg));
+  }
+  async function decFile(raw: ClipFile): Promise<ClipFile> {
+    const meta = await decryptText(raw.name);
+    if (meta) {
+      try {
+        const j = JSON.parse(meta) as { name?: string; mime?: string; size?: number };
+        return { ...raw, name: String(j.name || "file"), mime: String(j.mime || "application/octet-stream"), size: Number(j.size) || raw.size };
+      } catch {}
+    }
+    return raw; // legacy plaintext file or wrong key
+  }
+  async function decFiles(raw: ClipFile[]): Promise<ClipFile[]> {
+    return Promise.all(raw.map(decFile));
+  }
 
   app.innerHTML = `
     <header class="top">
@@ -163,6 +195,7 @@ if (path === "/" || path === "/index.html") {
   const sheetCopy = document.getElementById("sheet-copy") as HTMLButtonElement;
   const peersEl = document.getElementById("peers")!;
   let openId = "";
+  let dead = false;
 
   const coarse = matchMedia("(pointer: coarse)").matches;
 
@@ -212,7 +245,8 @@ if (path === "/" || path === "/index.html") {
   }
 
   function tickExp() {
-    const el = document.getElementById("exp")!;
+    const el = document.getElementById("exp");
+    if (!el) return;
     if (!expiresAt) { el.textContent = ""; return; }
     const ms = expiresAt - Date.now();
     if (ms <= 0) { el.textContent = "expired"; return; }
@@ -283,28 +317,73 @@ if (path === "/" || path === "/index.html") {
   (document.getElementById("link") as HTMLInputElement).onfocus = (e) => (e.target as HTMLInputElement).select();
 
   /* files: upload + download */
-  function downloadFile(fileId: string) {
+  function markDead(expired: boolean) {
+    if (dead) return;
+    dead = true;
+    clearTimeout(retry);
+    try { ws?.close(); } catch {}
+    ws = null;
+    setLive(false, "expired");
+    document.getElementById("share")?.remove();
+    document.querySelector(".bar")?.remove();
+    document.querySelector(".composer")?.remove();
+    list.className = "";
+    list.innerHTML = `<div class="hero" style="min-height:50dvh"><h1>${expired ? "Session expired" : "Session not found"}</h1><p>${expired ? "It hit its time limit or was closed after 1h with no devices." : "It may have expired or the code is wrong."}</p><div class="actions"><a class="btn primary" href="/">Start a new session</a></div></div>`;
+  }
+  function isGone(err: unknown): "expired" | "missing" | null {
+    const s = String(err);
+    if (s.startsWith("410")) return "expired";
+    if (s.startsWith("404")) return "missing";
+    return null;
+  }
+  async function downloadFile(fileId: string) {
     const f = files.find((x) => x.id === fileId);
-    const a = document.createElement("a");
-    a.href = `/api/s/${id}/files/${fileId}`;
-    if (f) a.download = f.name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    buzz();
+    try {
+      const r = await fetch(`/api/s/${id}/files/${fileId}`);
+      if (!r.ok) {
+        const gone = r.status === 410 ? "expired" : r.status === 404 ? "missing" : null;
+        if (gone) markDead(gone === "expired");
+        throw new Error(String(r.status));
+      }
+      const buf = await r.arrayBuffer();
+      // E2EE: body is iv||ct||tag — decrypt locally, fall back to raw for legacy files
+      const pt = await decryptBytes(buf);
+      const blob = pt ? new Blob([pt], { type: f?.mime || "application/octet-stream" }) : new Blob([buf]);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = f?.name || fileId;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 30_000);
+      a.remove();
+      buzz();
+    } catch {
+      toast("Download failed");
+    }
   }
   async function uploadFile(f: File) {
-    if (f.size > MAX_FILE_SIZE) { toast("File too big (max 25MB)"); return; }
+    // leave headroom: the encrypted body is ~28 bytes larger than the plaintext
+    if (f.size > MAX_FILE_SIZE - 1024) { toast("File too big (max 25MB)"); return; }
     if (!f.size) { toast("Empty file"); return; }
-    toast("Uploading…");
-    const fd = new FormData();
-    fd.append("file", f, f.name || "file");
-    fd.append("device", deviceName());
+    if (!hasKey()) { toast("Enter the session key first"); return; }
+    toast("Encrypting…");
     try {
+      // E2EE: encrypt bytes + metadata locally; the server stores only ciphertext
+      const body = await encryptBytes(await f.arrayBuffer());
+      const metaEnv = await encryptText(JSON.stringify({ name: f.name || "file", mime: f.type || "application/octet-stream", size: f.size }));
+      const fd = new FormData();
+      fd.append("file", new Blob([body]), metaEnv);
+      fd.append("device", deviceName());
+      toast("Uploading…");
       const r = await fetch(`/api/s/${id}/files`, { method: "POST", body: fd });
-      if (!r.ok) throw new Error(await r.text());
+      if (!r.ok) {
+        const gone = r.status === 410 ? "expired" : r.status === 404 ? "missing" : null;
+        if (gone) markDead(gone === "expired");
+        throw new Error(await r.text());
+      }
       const { file } = (await r.json()) as { file: ClipFile };
-      if (!files.some((x) => x.id === file.id)) { files.push(file); render(); }
+      const dec = await decFile(file);
+      if (!files.some((x) => x.id === file.id)) { files.push(dec); render(); }
       toast("Uploaded");
       buzz();
     } catch {
@@ -330,52 +409,70 @@ if (path === "/" || path === "/index.html") {
   async function load() {
     try {
       const data = await api<{ messages: Msg[]; files?: ClipFile[]; expiresAt: number }>(`/api/s/${id}/history`);
-      messages = data.messages;
-      files = data.files ?? [];
+      messages = await decMsgs(data.messages);
+      files = await decFiles(data.files ?? []);
       expiresAt = data.expiresAt;
       render(); tickExp();
     } catch (err) {
-      document.getElementById("share")!.remove();
-      document.querySelector(".bar")?.remove();
-      document.querySelector(".composer")?.remove();
-      list.className = "";
-      list.innerHTML = `<div class="hero" style="min-height:50dvh"><h1>Session not found</h1><p>It may have expired or the code is wrong.</p><div class="actions"><a class="btn primary" href="/">Start a new session</a></div></div>`;
+      markDead(isGone(err) === "expired");
       throw err;
     }
   }
 
   let retry: number | undefined;
   function connect() {
+    if (dead) return;
     clearTimeout(retry);
     const proto = location.protocol === "https:" ? "wss" : "ws";
     ws = new WebSocket(`${proto}://${location.host}/api/s/${id}/ws?device=${encodeURIComponent(deviceName())}`);
     ws.onopen = () => setLive(true, "live");
-    ws.onclose = () => { setLive(false, "reconnecting"); retry = window.setTimeout(connect, 1500); };
+    ws.onclose = (ev) => {
+      if (dead) return;
+      if (ev.code === 4410 || (ev as CloseEvent).code === 4404) { markDead(true); return; }
+      setLive(false, "reconnecting");
+      // Handshake failures (1006) hide the HTTP 404/410: verify via history
+      // before retrying so dead sessions don't reconnect forever.
+      retry = window.setTimeout(async () => {
+        if (dead) return;
+        try {
+          const d = await api<{ messages: Msg[]; files?: ClipFile[]; expiresAt: number }>(`/api/s/${id}/history`);
+          messages = await decMsgs(d.messages); files = await decFiles(d.files ?? files); expiresAt = d.expiresAt; render(); tickExp();
+          connect();
+        } catch (err) {
+          const gone = isGone(err);
+          if (gone) markDead(gone === "expired");
+          else connect();
+        }
+      }, 1500);
+    };
     ws.onerror = () => { try { ws?.close(); } catch {} };
-    ws.onmessage = (ev) => {
+    ws.onmessage = async (ev) => {
       try {
         const o = JSON.parse(ev.data);
         if (o.type === "msg" && o.msg) {
-          if (!messages.some((x) => x.id === o.msg.id)) { messages.push(o.msg); render(); tickExp(); }
+          const msg = await decMsg(o.msg as Msg);
+          if (!messages.some((x) => x.id === msg.id)) { messages.push(msg); render(); tickExp(); }
         } else if (o.type === "file" && o.file) {
-          if (!files.some((x) => x.id === o.file.id)) { files.push(o.file); render(); tickExp(); }
+          const file = await decFile(o.file as ClipFile);
+          if (!files.some((x) => x.id === file.id)) { files.push(file); render(); tickExp(); }
         } else if (o.type === "hello") {
-          messages = o.messages ?? messages;
-          files = o.files ?? files;
+          messages = await decMsgs(o.messages ?? messages);
+          files = await decFiles(o.files ?? files);
           expiresAt = o.expiresAt ?? expiresAt;
           render(); tickExp();
-          setLive(true, `live · ${o.peers ?? 1}`);
+          const n = o.peers ?? 1;
+          setLive(true, `live · ${n} ${n === 1 ? "device" : "devices"}`);
         } else if (o.type === "peers") {
-          setLive(true, `live · ${o.peers}`);
+          setLive(true, `live · ${o.peers} ${o.peers === 1 ? "device" : "devices"}`);
         }
       } catch {}
     };
   }
   // phones suspend sockets in the background: reconnect + refresh on return
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState !== "visible") return;
+    if (document.visibilityState !== "visible" || dead || !hasKey()) return;
     if (!ws || ws.readyState === WebSocket.CLOSED) connect();
-    api<{ messages: Msg[]; files?: ClipFile[]; expiresAt: number }>(`/api/s/${id}/history`).then((d) => { messages = d.messages; files = d.files ?? files; expiresAt = d.expiresAt; render(); tickExp(); }).catch(() => {});
+    api<{ messages: Msg[]; files?: ClipFile[]; expiresAt: number }>(`/api/s/${id}/history`).then(async (d) => { messages = await decMsgs(d.messages); files = await decFiles(d.files ?? files); expiresAt = d.expiresAt; render(); tickExp(); }).catch(() => {});
   });
 
   /* composer */
@@ -391,7 +488,7 @@ if (path === "/" || path === "/index.html") {
   const vv = window.visualViewport;
   const composerEl = document.querySelector<HTMLElement>(".composer")!;
   function track() {
-    if (!vv) return;
+    if (!vv || !composerEl.isConnected) return; // composer is gone on the key-entry screen
     const lift = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
     composerEl.style.transform = lift ? `translateY(${-lift}px)` : "";
     composerEl.classList.toggle("kb", lift > 80);
@@ -406,21 +503,26 @@ if (path === "/" || path === "/index.html") {
   async function send() {
     const text = box.value.trim();
     if (!text) return;
+    if (text.length > 64 * 1024) { toast("Too long (max 64KB)"); return; }
+    if (!hasKey()) { toast("Enter the session key first"); return; }
     box.value = ""; fit();
     buzz(12);
     try {
+      const payload = { text: await encryptText(text), device: deviceName() };
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ text, device: deviceName() }));
+        ws.send(JSON.stringify(payload));
       } else {
         const { msg } = await api<{ msg: Msg }>(`/api/s/${id}/messages`, {
           method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ text, device: deviceName() }),
+          body: JSON.stringify(payload),
         });
-        messages.push(msg); render(); tickExp();
+        messages.push(await decMsg(msg)); render(); tickExp();
       }
       window.scrollTo({ top: 0, behavior: "smooth" });
-    } catch {
-      box.value = text; fit(); toast("Send failed");
+    } catch (err) {
+      const gone = isGone(err);
+      if (gone) markDead(gone === "expired");
+      box.value = text; fit(); toast(gone ? "Session expired" : "Send failed");
     }
     // keep the keyboard open for quick consecutive clips
     box.focus({ preventScroll: true });
@@ -452,5 +554,39 @@ if (path === "/" || path === "/index.html") {
   };
 
   fit();
-  load().then(() => { connect(); if (!coarse) box.focus({ preventScroll: true }); }).catch(() => {});
+
+  /* boot: with the key, join the session; without it, ask for it first */
+  function renderKeyEntry() {
+    app.innerHTML = `
+      <header class="top"><a class="brand" href="/" aria-label="clipdrop home">${mark(26)}<span>clip<b>drop</b></span></a></header>
+      <main class="hero">
+        ${mark(72)}
+        <h1>This session is<br />end-to-end encrypted.</h1>
+        <p>The key is the part after the <b>#</b> in the session link. Open the full link on this device, or paste it below.</p>
+        <div class="actions">
+          <div class="join">
+            <input id="keyin" class="field" placeholder="full link or key" maxlength="500" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="go" inputmode="text" aria-label="Session link or key" />
+            <button id="keygo" class="btn primary">Unlock</button>
+          </div>
+          <p class="err" id="keyerr" role="alert"></p>
+        </div>
+      </main>
+      <div class="foot">A bare code like <b>${esc(id)}</b> isn't enough — the key never leaves the devices that have the link.</div>`;
+    const input = document.getElementById("keyin") as HTMLInputElement;
+    const err = document.getElementById("keyerr") as HTMLParagraphElement;
+    const submit = () => {
+      const raw = input.value.trim();
+      const frag = raw.includes("#") ? raw.slice(raw.indexOf("#") + 1) : raw;
+      if (validKey(frag)) { location.hash = frag; location.reload(); }
+      else err.textContent = "That doesn't look like the full link — copy it from a device that has the session";
+    };
+    (document.getElementById("keygo") as HTMLButtonElement).onclick = submit;
+    input.onkeydown = (ev) => { if (ev.key === "Enter") submit(); };
+  }
+
+  if (hasKey()) {
+    load().then(() => { connect(); if (!coarse) box.focus({ preventScroll: true }); }).catch(() => {});
+  } else {
+    renderKeyEntry();
+  }
 }

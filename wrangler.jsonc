@@ -13,6 +13,10 @@
       {
         "name": "ROOM",
         "class_name": "SessionRoom"
+      },
+      {
+        "name": "GATE",
+        "class_name": "RateGate"
       }
     ]
   },
@@ -26,6 +30,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["SessionRoom"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["RateGate"]
     }
   ],
   "observability": {

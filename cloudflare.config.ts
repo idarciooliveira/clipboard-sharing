@@ -18,10 +18,15 @@ export default defineConfig({
         worker: "clipdrop",
         exportName: "SessionRoom",
       }),
+      GATE: bindings.durableObject({
+        worker: "clipdrop",
+        exportName: "RateGate",
+      }),
       FILES: bindings.r2({ name: "clipdrop-files" }),
     },
     exports: {
       SessionRoom: exports.durableObject({ storage: "sqlite" }),
+      RateGate: exports.durableObject({ storage: "memory" }),
     },
   },
 });
