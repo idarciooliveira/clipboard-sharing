@@ -386,6 +386,23 @@ if (path === "/" || path === "/index.html") {
   }
   box.addEventListener("input", fit);
 
+  // iOS Safari ignores interactive-widget and leaves fixed elements under the keyboard:
+  // lift the composer by however much the visual viewport has shrunk or scrolled.
+  const vv = window.visualViewport;
+  const composerEl = document.querySelector<HTMLElement>(".composer")!;
+  function track() {
+    if (!vv) return;
+    const lift = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+    composerEl.style.transform = lift ? `translateY(${-lift}px)` : "";
+    composerEl.classList.toggle("kb", lift > 80);
+  }
+  if (vv) {
+    vv.addEventListener("resize", track);
+    vv.addEventListener("scroll", track);
+  }
+  box.addEventListener("focus", () => { track(); setTimeout(track, 300); });
+  box.addEventListener("blur", () => { composerEl.style.transform = ""; composerEl.classList.remove("kb"); });
+
   async function send() {
     const text = box.value.trim();
     if (!text) return;
@@ -408,7 +425,10 @@ if (path === "/" || path === "/index.html") {
     // keep the keyboard open for quick consecutive clips
     box.focus({ preventScroll: true });
   }
-  sendBtn.onmousedown = (e) => e.preventDefault(); // don't steal focus from the textarea
+  // don't steal focus from the textarea (pointerdown too, touchstart would cancel the click on iOS)
+  for (const ev of ["mousedown", "pointerdown"]) {
+    sendBtn.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
+  }
   sendBtn.onclick = send;
   box.onkeydown = (ev) => {
     if (ev.key !== "Enter" || ev.isComposing) return;
@@ -417,7 +437,7 @@ if (path === "/" || path === "/index.html") {
   };
 
   const pasteBtn = document.getElementById("paste") as HTMLButtonElement;
-  pasteBtn.onmousedown = (e) => e.preventDefault();
+  pasteBtn.addEventListener("mousedown", (e) => e.preventDefault());
   pasteBtn.onclick = async () => {
     try {
       const t = await navigator.clipboard.readText();
