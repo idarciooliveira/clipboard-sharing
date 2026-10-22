@@ -27,10 +27,10 @@ Web:
 CLI:
 ```bash
 HOST=https://clipdrop.idarciooliveira.workers.dev
-node cli/src/index.js new --host $HOST
-echo "hello from laptop" | node cli/src/index.js push -s k7xq2p --host $HOST
-node cli/src/index.js pull -s k7xq2p --host $HOST
-node cli/src/index.js pull -s k7xq2p --watch --host $HOST
+SESSION=$(node cli/src/index.js new --host "$HOST")
+echo "hello from laptop" | node cli/src/index.js push -s "$SESSION" --host "$HOST"
+node cli/src/index.js pull -s "$SESSION" --host "$HOST"
+node cli/src/index.js pull -s "$SESSION" --watch --host "$HOST"
 ```
 
 ## Proof
