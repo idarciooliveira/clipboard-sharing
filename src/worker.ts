@@ -67,13 +67,19 @@ function getGate(env: Env) {
 }
 
 // Returns a 429 Response when the caller is over the limit, else null.
+// Fails open: a RateGate hiccup must not take the whole API down.
 async function rateLimit(env: Env, request: Request, bucket: RateBucket): Promise<Response | null> {
   const ip = request.headers.get("CF-Connecting-IP") || "local";
   const { cap, rate } = RATE_BUCKETS[bucket];
-  const res = await getGate(env).fetch(
-    new Request(`https://gate/check?k=${encodeURIComponent(ip)}&c=${cap}&r=${rate}`)
-  );
-  return res.ok ? null : json({ error: "rate limited" }, 429);
+  try {
+    // key = bucket + ip so create/read/write stay isolated per IP
+    const res = await getGate(env).fetch(
+      new Request(`https://gate/check?k=${encodeURIComponent(`${bucket}:${ip}`)}&c=${cap}&r=${rate}`)
+    );
+    return res.ok ? null : json({ error: "rate limited" }, 429);
+  } catch {
+    return null;
+  }
 }
 
 function safeFileName(raw: string): string {
@@ -644,7 +650,8 @@ export class SessionRoom extends DurableObject<Env> {
 // Counters live in memory only: losing them on eviction/restart slightly loosens the
 // limit, which is fine — the goal is damping enumeration scans and abuse, not billing.
 export class RateGate extends DurableObject<Env> {
-  buckets = new Map<string, { tokens: number; last: number }>();
+  // full = timestamp at which the bucket has refilled to cap (entry is then safe to drop)
+  buckets = new Map<string, { tokens: number; last: number; full: number }>();
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -657,19 +664,28 @@ export class RateGate extends DurableObject<Env> {
     const now = Date.now();
     let b = this.buckets.get(key);
     if (!b) {
-      // memory guard: an attacker cycling fake IPs can't grow this unbounded
-      if (this.buckets.size > 10_000) this.buckets.clear();
-      b = { tokens: cap, last: now };
+      // memory guard: an attacker cycling fake IPs can't grow this unbounded.
+      // Evict only fully-refilled (idle) buckets so active abusers keep their limits.
+      if (this.buckets.size > 10_000) {
+        for (const [k, v] of this.buckets) if (v.full <= now) this.buckets.delete(k);
+        // still over (all buckets active): drop the oldest-inserted entry
+        if (this.buckets.size > 10_000) {
+          const oldest = this.buckets.keys().next().value;
+          if (oldest !== undefined) this.buckets.delete(oldest);
+        }
+      }
+      b = { tokens: cap, last: now, full: now };
     }
     const tokens = Math.min(cap, b.tokens + ((now - b.last) / 1000) * rate);
+    const fullAt = (left: number) => now + ((cap - left) / rate) * 1000;
     if (tokens < 1) {
-      this.buckets.set(key, { tokens, last: now });
+      this.buckets.set(key, { tokens, last: now, full: fullAt(tokens) });
       return new Response(JSON.stringify({ ok: false, tokens }), {
         status: 429,
         headers: { "content-type": "application/json", "retry-after": "1" },
       });
     }
-    this.buckets.set(key, { tokens: tokens - 1, last: now });
+    this.buckets.set(key, { tokens: tokens - 1, last: now, full: fullAt(tokens - 1) });
     return new Response(JSON.stringify({ ok: true, tokens: tokens - 1 }), {
       headers: { "content-type": "application/json" },
     });

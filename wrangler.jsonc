@@ -33,7 +33,7 @@
     },
     {
       "tag": "v2",
-      "new_classes": ["RateGate"]
+      "new_sqlite_classes": ["RateGate"]
     }
   ],
   "observability": {

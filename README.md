@@ -57,10 +57,10 @@ Web:
 CLI:
 ```bash
 HOST=https://clipdrop.idarciooliveira.workers.dev
-node cli/src/index.js new --host "$HOST"     # prints the URL with #key, saves it locally
-echo "hello from laptop" | node cli/src/index.js push -s "$SESSION" --host "$HOST"
-node cli/src/index.js pull -s "$SESSION" --host "$HOST"
-node cli/src/index.js pull -s "$SESSION" --watch --host "$HOST"
+node cli/src/index.js new --host "$HOST"     # prints the URL with #key, saves session + key locally
+echo "hello from laptop" | node cli/src/index.js push --host "$HOST"
+node cli/src/index.js pull --host "$HOST"
+node cli/src/index.js pull --watch --host "$HOST"
 ```
 
 The key is saved to `~/.config/clipdrop/config.json` by `new`; other machines need

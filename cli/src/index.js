@@ -12,7 +12,7 @@
 // `#` in the session link; it is generated locally on `new` and saved to the
 // config. The server only ever sees ciphertext.
 
-import { readFileSync, existsSync, mkdirSync, writeFileSync, statSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, statSync, realpathSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join, basename } from "node:path";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
@@ -123,8 +123,11 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a.startsWith("--")) {
-      const k = a.slice(2);
-      const v = argv[i + 1] && !argv[i + 1].startsWith("-") ? argv[++i] : "true";
+      const eq = a.indexOf("=");
+      const k = eq < 0 ? a.slice(2) : a.slice(2, eq);
+      // base64url keys can start with "-", so --key always consumes its value
+      const takesNext = k === "key" ? i + 1 < argv.length : argv[i + 1] && !argv[i + 1].startsWith("-");
+      const v = eq >= 0 ? a.slice(eq + 1) : takesNext ? argv[++i] : "true";
       out.flags[k] = v;
     } else if (a === "-s" || a === "-h" || a === "-o" || a === "-f") {
       out.flags[a.slice(1)] = argv[++i] ?? "";
@@ -287,8 +290,8 @@ async function cmdGet(flags, positional) {
           encrypted = true;
           if (!key) throw new Error("this file is encrypted — pass --key <key> (the part after # in the link)");
           const meta = decMeta(key, f.name);
-          if (meta?.name) out ||= String(meta.name);
-        } else out ||= f.name;
+          if (meta?.name) out ||= basename(String(meta.name));
+        } else out ||= basename(f.name);
       }
     }
   } catch (e) {
@@ -341,4 +344,13 @@ the key is the part after # in the session link; \`clipdrop new\` saves it local
 }
 
 // allow importing the crypto helpers (tests) without running the CLI
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+// (resolve symlinks so `npm link` / bin shims still count as direct invocation)
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+}
+if (isDirectRun()) main();
