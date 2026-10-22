@@ -1,0 +1,19 @@
+{
+  "name": "clipdrop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Blazing fast clipboard sharing across devices — Cloudflare Workers + Durable Objects",
+  "type": "module",
+  "scripts": {
+    "dev": "cf dev",
+    "deploy": "cf deploy",
+    "build": "npm run build:web",
+    "build:web": "npm --prefix web run build",
+    "dev:web": "npm --prefix web run dev",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251003.0",
+    "typescript": "^5.6.3"
+  }
+}

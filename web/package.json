@@ -1,0 +1,19 @@
+{
+  "name": "clipdrop-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@types/qrcode": "^1.5.5",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.0"
+  }
+}
