@@ -13,7 +13,7 @@
     "test": "node --test test/*.test.js"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20251003.0",
+    "@cloudflare/workers-types": "^5.20261022.1",
     "cf": "^1.0.0-beta.20",
     "typescript": "^5.6.3",
     "wrangler": "^4.152.0"
