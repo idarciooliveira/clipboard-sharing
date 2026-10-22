@@ -16,6 +16,12 @@
       }
     ]
   },
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "clipdrop-files"
+    }
+  ],
   "migrations": [
     {
       "tag": "v1",

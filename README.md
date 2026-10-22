@@ -76,11 +76,13 @@ Production verified 2026-10-22 — see `proof/`:
 ## API
 
 - `POST /api/sessions {ttlHours?}` → `{id, url, expiresAt}`
-- `GET /api/s/:id/history` → `{messages, expiresAt}`
+- `GET /api/s/:id/history` → `{messages, files, expiresAt}`
 - `POST /api/s/:id/messages {text, device}` → `{msg}`
-- `WS /api/s/:id/ws?device=x` → `{type:'hello'|'msg'|'peers'}`
+- `POST /api/s/:id/files` (multipart, field `file`, + `device`) → `{file}` (25MB max)
+- `GET /api/s/:id/files/:fileId` → bytes (`Content-Disposition: attachment`, Range supported)
+- `WS /api/s/:id/ws?device=x` → `{type:'hello'|'msg'|'file'|'peers'}`
 
-Limits: 6-char IDs, 64KB/msg, 200 msgs/session, 12h TTL (alarm wipes DO).
+Limits: 6-char IDs, 64KB/msg, 200 msgs/session, 25MB/file, 50 files / 200MB per session, 12h TTL (alarm wipes DO + R2 keys).
 
 ## Project layout
 

@@ -1,6 +1,8 @@
 import QRCode from "qrcode";
 
 type Msg = { id: string; text: string; device: string; createdAt: number };
+type ClipFile = { id: string; name: string; mime: string; size: number; device: string; createdAt: number };
+const MAX_FILE_SIZE = 25 * 1024 * 1024;
 
 const app = document.getElementById("app")!;
 const path = location.pathname;
@@ -14,6 +16,7 @@ const ICON = {
   send: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>`,
   qr: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v7M14 20h3"/></svg>`,
   close: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>`,
+  attach: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11l-8.5 8.5a5.5 5.5 0 0 1-7.78-7.78L13 3.5a3.7 3.7 0 0 1 5.23 5.23l-8.25 8.25a1.85 1.85 0 0 1-2.62-2.62L15 6.75"/></svg>`,
 };
 
 // logo mark (two squares + cut triangle); colours follow the theme through CSS variables
@@ -36,6 +39,7 @@ function linkify(s: string): string {
 }
 const isUrl = (s: string) => /^https?:\/\/\S+$/.test(s.trim());
 const fmtTime = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const fmtSize = (n: number) => n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 const buzz = (ms = 8) => { try { navigator.vibrate?.(ms); } catch {} };
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
@@ -119,6 +123,7 @@ if (path === "/" || path === "/index.html") {
 
   const link = `${location.origin}/s/${id}`;
   let messages: Msg[] = [];
+  let files: ClipFile[] = [];
   let ws: WebSocket | null = null;
   let expiresAt = 0;
   let qrReady = false;
@@ -136,9 +141,11 @@ if (path === "/" || path === "/index.html") {
       </div>
       <div class="qr-panel"><div class="qr-box"><canvas id="qr"></canvas></div><p class="qr-hint">Scan with your phone camera</p></div>
     </section>
-    <div class="bar"><span><b id="count">0</b> clips</span><span id="exp"></span></div>
+    <div class="bar"><span><b id="count">0</b> clips · <b id="fcount">0</b> files</span><span id="exp"></span></div>
     <div class="grid" id="list"></div>
     <div class="composer"><div class="composer-inner">
+      <button class="btn icon-btn attach" id="attach" aria-label="Attach file">${ICON.attach}</button>
+      <input type="file" id="filepick" hidden multiple />
       <button class="btn icon-btn paste" id="paste" aria-label="Paste from clipboard">${ICON.paste}</button>
       <textarea id="box" rows="1" placeholder="Paste or type…" enterkeyhint="send" aria-label="Message" autocomplete="off" autocapitalize="sentences"></textarea>
       <button class="btn primary icon-btn send" id="send" aria-label="Send" disabled>${ICON.send}</button>
@@ -166,12 +173,31 @@ if (path === "/" || path === "/index.html") {
 
   function render() {
     document.getElementById("count")!.textContent = String(messages.length);
-    if (!messages.length) {
-      list.innerHTML = `<div class="empty">Nothing here yet.<br />Paste something below.</div>`;
+    document.getElementById("fcount")!.textContent = String(files.length);
+    if (!messages.length && !files.length) {
+      list.innerHTML = `<div class="empty">Nothing here yet.<br />Paste something below, or attach a file.</div>`;
       return;
     }
-    // newest first
-    list.innerHTML = [...messages].reverse().map((msg) => {
+    // newest first, texts + files interleaved
+    type Item = { kind: "msg"; at: number; msg: Msg } | { kind: "file"; at: number; file: ClipFile };
+    const items: Item[] = [
+      ...messages.map((msg): Item => ({ kind: "msg", at: msg.createdAt, msg })),
+      ...files.map((file): Item => ({ kind: "file", at: file.createdAt, file })),
+    ].sort((a, b) => b.at - a.at);
+    list.innerHTML = items.map((it) => {
+      if (it.kind === "file") {
+        const f = it.file;
+        return `
+        <div class="clip file" data-file="${f.id}">
+          <div class="body"><span class="fname">${esc(f.name)}</span><span class="fsize">${esc(fmtSize(f.size))}</span></div>
+          <div class="foot-row">
+            <span class="tag">file</span>
+            <span class="grow"><span class="dev">${esc(f.device)} · </span>${fmtTime(f.createdAt)}</span>
+            <button class="btn sm" data-dl="${f.id}">Save</button>
+          </div>
+        </div>`;
+      }
+      const msg = it.msg;
       const url = isUrl(msg.text);
       return `
       <div class="clip${url ? " link" : ""}" role="button" tabindex="0" data-id="${msg.id}" aria-label="Open clip">
@@ -216,6 +242,10 @@ if (path === "/" || path === "/index.html") {
     const t = ev.target as HTMLElement;
     const cbtn = t.closest<HTMLButtonElement>("button[data-copy]");
     if (cbtn) { ev.stopPropagation(); const msg = byId(cbtn.dataset.copy); if (msg) copyClip(msg, cbtn); return; }
+    const dl = t.closest<HTMLButtonElement>("button[data-dl]");
+    if (dl) { ev.stopPropagation(); downloadFile(dl.dataset.dl!); return; }
+    const fcard = t.closest<HTMLElement>("[data-file]");
+    if (fcard) { downloadFile(fcard.dataset.file!); return; }
     const msg = byId(t.closest<HTMLElement>(".clip")?.dataset.id);
     if (msg) openClip(msg);
   });
@@ -252,11 +282,56 @@ if (path === "/" || path === "/index.html") {
   };
   (document.getElementById("link") as HTMLInputElement).onfocus = (e) => (e.target as HTMLInputElement).select();
 
+  /* files: upload + download */
+  function downloadFile(fileId: string) {
+    const f = files.find((x) => x.id === fileId);
+    const a = document.createElement("a");
+    a.href = `/api/s/${id}/files/${fileId}`;
+    if (f) a.download = f.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    buzz();
+  }
+  async function uploadFile(f: File) {
+    if (f.size > MAX_FILE_SIZE) { toast("File too big (max 25MB)"); return; }
+    if (!f.size) { toast("Empty file"); return; }
+    toast("Uploading…");
+    const fd = new FormData();
+    fd.append("file", f, f.name || "file");
+    fd.append("device", deviceName());
+    try {
+      const r = await fetch(`/api/s/${id}/files`, { method: "POST", body: fd });
+      if (!r.ok) throw new Error(await r.text());
+      const { file } = (await r.json()) as { file: ClipFile };
+      if (!files.some((x) => x.id === file.id)) { files.push(file); render(); }
+      toast("Uploaded");
+      buzz();
+    } catch {
+      toast("Upload failed");
+    }
+  }
+  async function uploadMany(list: FileList | File[] | null | undefined) {
+    if (!list) return;
+    for (const f of Array.from(list)) await uploadFile(f);
+  }
+  const attachBtn = document.getElementById("attach") as HTMLButtonElement;
+  const filepick = document.getElementById("filepick") as HTMLInputElement;
+  attachBtn.onclick = () => filepick.click();
+  filepick.onchange = () => { uploadMany(filepick.files); filepick.value = ""; };
+  list.addEventListener("dragover", (e) => e.preventDefault());
+  list.addEventListener("drop", (e) => { e.preventDefault(); uploadMany(e.dataTransfer?.files); });
+  box.addEventListener("paste", (e) => {
+    const fs = e.clipboardData?.files;
+    if (fs && fs.length) { e.preventDefault(); uploadMany(fs); }
+  });
+
   /* data */
   async function load() {
     try {
-      const data = await api<{ messages: Msg[]; expiresAt: number }>(`/api/s/${id}/history`);
+      const data = await api<{ messages: Msg[]; files?: ClipFile[]; expiresAt: number }>(`/api/s/${id}/history`);
       messages = data.messages;
+      files = data.files ?? [];
       expiresAt = data.expiresAt;
       render(); tickExp();
     } catch (err) {
@@ -282,8 +357,11 @@ if (path === "/" || path === "/index.html") {
         const o = JSON.parse(ev.data);
         if (o.type === "msg" && o.msg) {
           if (!messages.some((x) => x.id === o.msg.id)) { messages.push(o.msg); render(); tickExp(); }
+        } else if (o.type === "file" && o.file) {
+          if (!files.some((x) => x.id === o.file.id)) { files.push(o.file); render(); tickExp(); }
         } else if (o.type === "hello") {
           messages = o.messages ?? messages;
+          files = o.files ?? files;
           expiresAt = o.expiresAt ?? expiresAt;
           render(); tickExp();
           setLive(true, `live · ${o.peers ?? 1}`);
@@ -297,7 +375,7 @@ if (path === "/" || path === "/index.html") {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
     if (!ws || ws.readyState === WebSocket.CLOSED) connect();
-    api<{ messages: Msg[]; expiresAt: number }>(`/api/s/${id}/history`).then((d) => { messages = d.messages; expiresAt = d.expiresAt; render(); tickExp(); }).catch(() => {});
+    api<{ messages: Msg[]; files?: ClipFile[]; expiresAt: number }>(`/api/s/${id}/history`).then((d) => { messages = d.messages; files = d.files ?? files; expiresAt = d.expiresAt; render(); tickExp(); }).catch(() => {});
   });
 
   /* composer */

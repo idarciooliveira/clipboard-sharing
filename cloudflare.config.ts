@@ -18,6 +18,7 @@ export default defineConfig({
         worker: "clipdrop",
         exportName: "SessionRoom",
       }),
+      FILES: bindings.r2({ name: "clipdrop-files" }),
     },
     exports: {
       SessionRoom: exports.durableObject({ storage: "sqlite" }),

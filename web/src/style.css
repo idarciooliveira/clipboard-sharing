@@ -129,6 +129,9 @@ header.top {
 .clip.link .body { color: var(--accent-text); -webkit-line-clamp: 3; }
 .clip .foot-row { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .clip .foot-row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clip.file .body { display: flex; flex-direction: column; justify-content: center; gap: 4px; -webkit-line-clamp: unset; line-clamp: unset; }
+.clip.file .fname { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clip.file .fsize { font-size: 12px; color: var(--muted); }
 .tag { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; padding: 2px 6px; border-radius: 6px; border: 1px solid var(--line-strong); }
 .empty { grid-column: 1 / -1; text-align: center; color: var(--muted); padding: 56px 0; border: 1px dashed var(--line-strong); border-radius: var(--radius); }
 @keyframes pop { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: none; } }
@@ -174,6 +177,8 @@ dialog.sheet::backdrop { background: rgba(0, 0, 0, .55); backdrop-filter: blur(3
 }
 .composer .icon-btn { width: 40px; height: 40px; border-radius: 50%; flex: none; }
 .composer .paste { border: 0; color: var(--muted); }
+.composer .attach { border: 0; color: var(--muted); }
+.composer .attach:hover { color: var(--text); }
 .composer .paste:hover { color: var(--text); }
 .composer .send { border-radius: 50%; }
 
